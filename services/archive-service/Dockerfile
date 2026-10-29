@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+WORKDIR /app
+RUN useradd --create-home --shell /bin/bash appuser
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY src ./src
+RUN chown -R appuser:appuser /app
+USER appuser
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "src/main.py"]
