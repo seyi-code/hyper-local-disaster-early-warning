@@ -1,0 +1,160 @@
+version: "3.9"
+
+x-redis-url: &redis_url ${REDIS_URL:-redis://redis:6379/0}
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 -i healthcheck -W 3 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [internal]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: earlywarn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-earlywarn}
+      POSTGRES_DB: earlywarn
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U earlywarn -d earlywarn"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  telemetry-broker:
+    build:
+      context: ./services/telemetry-broker
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      REDIS_URL: *redis_url
+      REDIS_STREAM: ${REDIS_STREAM:-telemetry:raw}
+      ALERTS_STREAM: ${ALERTS_STREAM:-alerts:triggered}
+      MQTT_BROKER_URL: ${MQTT_BROKER_URL:-mqtt://mosquitto:1883}
+      MQTT_TOPIC: ${MQTT_TOPIC:-sensors/+/telemetry}
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-telemetry-broker}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      BROKER_PORT: ${BROKER_PORT:-3000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      API_KEY: ${API_KEY:-}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [internal]
+
+  anomaly-engine:
+    build:
+      context: ./services/anomaly-engine
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: *redis_url
+      REDIS_STREAM: ${REDIS_STREAM:-telemetry:raw}
+      ALERTS_STREAM: ${ALERTS_STREAM:-alerts:triggered}
+      REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-anomaly-workers}
+      REDIS_CONSUMER_NAME: ${REDIS_CONSUMER_NAME:-worker-1}
+      CUSUM_K: ${CUSUM_K:-0.5}
+      CUSUM_H: ${CUSUM_H:-5.0}
+      BASELINE_WINDOW: ${BASELINE_WINDOW:-30}
+      ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-300}
+      MIN_SAMPLES_BEFORE_DETECT: ${MIN_SAMPLES_BEFORE_DETECT:-15}
+      ALERT_MODE: ${ALERT_MODE:-console}
+      ALERT_DISPATCH_COOLDOWN: ${ALERT_DISPATCH_COOLDOWN:-45}
+      REQUIRE_ACK_FOR_CRITICAL: ${REQUIRE_ACK_FOR_CRITICAL:-true}
+      CRITICAL_ACK_TIMEOUT_SECONDS: ${CRITICAL_ACK_TIMEOUT_SECONDS:-300}
+      OFFLINE_THRESHOLD_SECONDS: ${OFFLINE_THRESHOLD_SECONDS:-600}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      DEFAULT_ALERT_RECIPIENTS: ${DEFAULT_ALERT_RECIPIENTS:-+256700000000}
+      WEBHOOK_ALERT_URL: ${WEBHOOK_ALERT_URL:-}
+      CELLS_CONFIG_PATH: /app/config/cells.json
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      telemetry-broker:
+        condition: service_started
+    restart: unless-stopped
+    networks: [internal]
+
+  archive-service:
+    build:
+      context: ./services/archive-service
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: *redis_url
+      REDIS_STREAM: ${REDIS_STREAM:-telemetry:raw}
+      ALERTS_STREAM: ${ALERTS_STREAM:-alerts:triggered}
+      ARCHIVE_CONSUMER_GROUP: archive-workers
+      REDIS_CONSUMER_NAME: archive-1
+      DATABASE_URL: ${DATABASE_URL:-postgresql://earlywarn:earlywarn@postgres:5432/earlywarn}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [internal]
+
+  dashboard:
+    build:
+      context: ./services/dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - telemetry-broker
+    restart: unless-stopped
+    networks: [internal]
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:
