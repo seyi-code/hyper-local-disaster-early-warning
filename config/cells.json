@@ -1,0 +1,34 @@
+{
+  "cells": [
+    {
+      "cell_id": "cell-kampala-01",
+      "name": "Kampala Central – Nakasero / Kololo",
+      "center": [-0.3136, 32.5811],
+      "radius_m": 1200,
+      "type": "urban",
+      "priority": "high",
+      "recipients": ["+256700000001", "+256700000002"],
+      "webhook_urls": []
+    },
+    {
+      "cell_id": "cell-kampala-02",
+      "name": "Kampala – Makerere / Wandegeya",
+      "center": [-0.3350, 32.5680],
+      "radius_m": 1500,
+      "type": "urban",
+      "priority": "high",
+      "recipients": ["+256700000003"],
+      "webhook_urls": []
+    },
+    {
+      "cell_id": "cell-entebbe-01",
+      "name": "Entebbe – Lakeshore & Airport corridor",
+      "center": [0.0422, 32.4435],
+      "radius_m": 2000,
+      "type": "peri-urban",
+      "priority": "medium",
+      "recipients": ["+256700000004"],
+      "webhook_urls": []
+    }
+  ]
+}
