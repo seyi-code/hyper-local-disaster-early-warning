@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hyper-Local Disaster Early Warning — Live</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3b82f6;
+      --warn: #f59e0b;
+      --crit: #ef4444;
+      --ok: #22c55e;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+    h1 { font-size: 1.35rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+    }
+    .card .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .card .value { font-size: 1.5rem; font-weight: 600; margin-top: 0.25rem; }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; }
+    .badge.ok { background: rgba(34,197,94,0.15); color: var(--ok); }
+    .badge.warn { background: rgba(245,158,11,0.15); color: var(--warn); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; }
+    .sev-critical { color: var(--crit); font-weight: 600; }
+    .sev-warning { color: var(--warn); }
+  </style>
+</head>
+<body>
+  <h1>Hyper-Local Disaster Early Warning</h1>
+  <p class="sub">Live telemetry · anomaly alerts · cell status</p>
+
+  <div class="grid">
+    <div class="card"><div class="label">Broker</div><div class="value"><span id="status-badge" class="badge ok">…</span></div></div>
+    <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div></div>
+    <div class="card"><div class="label">Messages</div><div class="value" id="msgs">—</div></div>
+    <div class="card"><div class="label">MQTT</div><div class="value" id="mqtt">—</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:1rem">
+    <div class="label" style="margin-bottom:0.5rem">Recent telemetry</div>
+    <table>
+      <thead><tr><th>Sensor</th><th>Cell</th><th>Metric</th><th>Value</th><th>Time</th></tr></thead>
+      <tbody id="telemetry-body"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="label" style="margin-bottom:0.5rem">Recent alerts</div>
+    <table>
+      <thead><tr><th>Severity</th><th>Cell</th><th>Message</th><th>Time</th></tr></thead>
+      <tbody id="alerts-body"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      ? 'http://localhost:3000' : '';
+
+    async function refresh() {
+      try {
+        const h = await fetch(API + '/health').then(r => r.json());
+        document.getElementById('status-badge').textContent = h.status === 'ok' ? 'ONLINE' : 'DEGRADED';
+        document.getElementById('status-badge').className = 'badge ' + (h.status === 'ok' ? 'ok' : 'warn');
+        document.getElementById('uptime').textContent = Math.round(h.uptime_s || 0) + 's';
+        document.getElementById('msgs').textContent = h.messages_processed || 0;
+        document.getElementById('mqtt').textContent = h.mqtt_connected ? 'connected' : 'down';
+
+        const t = await fetch(API + '/telemetry/recent?count=20').then(r => r.json());
+        document.getElementById('telemetry-body').innerHTML = (t.items || []).map(i =>
+          `<tr><td>${i.sensor_id}</td><td>${i.cell_id}</td><td>${i.metric}</td><td>${i.value}</td><td>${(i.timestamp||'').slice(11,19)}</td></tr>`
+        ).join('') || '<tr><td colspan="5">No data yet</td></tr>';
+
+        try {
+          const a = await fetch(API + '/alerts/recent?count=10').then(r => r.json());
+          document.getElementById('alerts-body').innerHTML = (a.items || []).map(i =>
+            `<tr><td class="sev-${i.severity||'warning'}">${i.severity||'warning'}</td><td>${i.cell_id}</td><td>${i.message||''}</td><td>${(i.timestamp||'').slice(11,19)}</td></tr>`
+          ).join('') || '<tr><td colspan="4">No alerts</td></tr>';
+        } catch (_) {
+          document.getElementById('alerts-body').innerHTML = '<tr><td colspan="4">Alerts unavailable</td></tr>';
+        }
+      } catch (e) {
+        document.getElementById('status-badge').textContent = 'OFFLINE';
+        document.getElementById('status-badge').className = 'badge warn';
+        console.warn(e);
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 2500);
+  </script>
+</body>
+</html>
