@@ -3,108 +3,259 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hyper-Local Disaster Early Warning — Live</title>
+  <title>Early Warning — Ops Control</title>
   <style>
     :root {
-      --bg: #0f1419;
-      --card: #1a2332;
-      --border: #2d3a4f;
-      --text: #e7ecf3;
-      --muted: #8b9bb4;
-      --accent: #3b82f6;
-      --warn: #f59e0b;
-      --crit: #ef4444;
-      --ok: #22c55e;
+      --bg: #0b1220; --panel: #121a2b; --card: #1a2438; --border: #2a3650;
+      --text: #e8eef8; --muted: #8b9bb4; --accent: #3b82f6;
+      --ok: #22c55e; --warn: #f59e0b; --crit: #ef4444;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: Inter, system-ui, -apple-system, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      padding: 1.5rem;
+    body { font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    header {
+      position: sticky; top: 0; z-index: 20; background: rgba(11,18,32,0.92);
+      backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
+      padding: 0.85rem 1.25rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem;
     }
-    h1 { font-size: 1.35rem; font-weight: 600; margin-bottom: 0.25rem; }
-    .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 1rem;
-    }
-    .card .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
-    .card .value { font-size: 1.5rem; font-weight: 600; margin-top: 0.25rem; }
-    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; }
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    header .sub { color: var(--muted); font-size: 0.8rem; }
+    .badge { display: inline-flex; padding: 0.2rem 0.65rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
     .badge.ok { background: rgba(34,197,94,0.15); color: var(--ok); }
     .badge.warn { background: rgba(245,158,11,0.15); color: var(--warn); }
-    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
-    th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; }
-    .sev-critical { color: var(--crit); font-weight: 600; }
-    .sev-warning { color: var(--warn); }
+    .badge.crit { background: rgba(239,68,68,0.15); color: var(--crit); }
+    .badge.muted { background: rgba(139,155,180,0.12); color: var(--muted); }
+    main { max-width: 1280px; margin: 0 auto; padding: 1.25rem; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem; }
+    .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem 1rem; }
+    .kpi .label { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi .value { font-size: 1.35rem; font-weight: 600; margin-top: 0.2rem; }
+    .layout { display: grid; grid-template-columns: 1.4fr 1fr; gap: 1rem; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .panel-h { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.15); }
+    .panel-h h2 { font-size: 0.9rem; font-weight: 600; }
+    .panel-b { padding: 0.75rem 1rem; max-height: 420px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th, td { text-align: left; padding: 0.45rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; font-size: 0.7rem; text-transform: uppercase; }
+    .sev-critical { color: var(--crit); font-weight: 700; }
+    .sev-warning { color: var(--warn); font-weight: 600; }
+    button { cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 8px; padding: 0.35rem 0.7rem; font-size: 0.75rem; font-weight: 600; }
+    button.primary { background: var(--accent); border-color: #2563eb; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    select { background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 0.35rem 0.55rem; font-size: 0.8rem; }
+    .toast { position: fixed; bottom: 1.25rem; right: 1.25rem; background: var(--card); border: 1px solid var(--border); padding: 0.75rem 1rem; border-radius: 10px; display: none; z-index: 50; max-width: 320px; font-size: 0.85rem; }
+    .toast.show { display: block; }
+    .empty { color: var(--muted); font-size: 0.85rem; padding: 1rem 0; }
+    .cell-chip { display: inline-flex; align-items: center; gap: 0.5rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.75rem; margin: 0.25rem; font-size: 0.8rem; }
+    .mono { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; }
+    .footer-note { color: var(--muted); font-size: 0.75rem; margin-top: 1rem; text-align: center; }
   </style>
 </head>
 <body>
-  <h1>Hyper-Local Disaster Early Warning</h1>
-  <p class="sub">Live telemetry · anomaly alerts · cell status</p>
-
-  <div class="grid">
-    <div class="card"><div class="label">Broker</div><div class="value"><span id="status-badge" class="badge ok">…</span></div></div>
-    <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div></div>
-    <div class="card"><div class="label">Messages</div><div class="value" id="msgs">—</div></div>
-    <div class="card"><div class="label">MQTT</div><div class="value" id="mqtt">—</div></div>
-  </div>
-
-  <div class="card" style="margin-bottom:1rem">
-    <div class="label" style="margin-bottom:0.5rem">Recent telemetry</div>
-    <table>
-      <thead><tr><th>Sensor</th><th>Cell</th><th>Metric</th><th>Value</th><th>Time</th></tr></thead>
-      <tbody id="telemetry-body"></tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <div class="label" style="margin-bottom:0.5rem">Recent alerts</div>
-    <table>
-      <thead><tr><th>Severity</th><th>Cell</th><th>Message</th><th>Time</th></tr></thead>
-      <tbody id="alerts-body"></tbody>
-    </table>
-  </div>
-
+  <header>
+    <div>
+      <h1>Early Warning — Ops Control</h1>
+      <div class="sub">Monitor sensors · acknowledge critical alerts · inspect cells</div>
+    </div>
+    <div class="toolbar">
+      <span id="sys-badge" class="badge muted">CONNECTING</span>
+      <span class="badge muted mono" id="api-base-label"></span>
+      <button type="button" id="btn-refresh">Refresh</button>
+    </div>
+  </header>
+  <main>
+    <div class="kpis">
+      <div class="kpi"><div class="label">Broker</div><div class="value" id="k-status">—</div></div>
+      <div class="kpi"><div class="label">Uptime</div><div class="value" id="k-uptime">—</div></div>
+      <div class="kpi"><div class="label">Messages</div><div class="value" id="k-msgs">—</div></div>
+      <div class="kpi"><div class="label">MQTT</div><div class="value" id="k-mqtt">—</div></div>
+      <div class="kpi"><div class="label">Redis</div><div class="value" id="k-redis">—</div></div>
+      <div class="kpi"><div class="label">Open alerts</div><div class="value" id="k-alerts">—</div></div>
+    </div>
+    <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-h"><h2>Cells</h2><span class="sub" id="cell-count"></span></div>
+      <div class="panel-b" id="cells-wrap" style="max-height:none"><div class="empty">Loading cells…</div></div>
+    </div>
+    <div class="layout">
+      <div class="panel">
+        <div class="panel-h">
+          <h2>Live telemetry</h2>
+          <div class="toolbar">
+            <select id="filter-cell"><option value="">All cells</option></select>
+            <select id="filter-metric">
+              <option value="">All metrics</option>
+              <option value="water_level_cm">Water level</option>
+              <option value="pm25_ugm3">PM2.5</option>
+            </select>
+          </div>
+        </div>
+        <div class="panel-b">
+          <table>
+            <thead><tr><th>Sensor</th><th>Cell</th><th>Metric</th><th>Value</th><th>Time</th></tr></thead>
+            <tbody id="telemetry-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h2>Alerts &amp; control</h2><span class="sub">ACK critical before SMS escalates</span></div>
+        <div class="panel-b">
+          <table>
+            <thead><tr><th>Sev</th><th>Cell</th><th>Message</th><th>Action</th></tr></thead>
+            <tbody id="alerts-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:1rem">
+      <div class="panel-h"><h2>ACK audit trail</h2></div>
+      <div class="panel-b">
+        <table>
+          <thead><tr><th>Cell</th><th>Sensor</th><th>By</th><th>When</th><th>Note</th></tr></thead>
+          <tbody id="acks-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <p class="footer-note">Auto-refresh 2.5s · ACK writes to Redis stream alerts:acked</p>
+  </main>
+  <div class="toast" id="toast"></div>
   <script>
-    const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-      ? 'http://localhost:3000' : '';
-
+    const API = (function () {
+      const q = new URLSearchParams(location.search).get("api");
+      if (q) return q.replace(/\/$/, "");
+      if (location.hostname === "localhost" || location.hostname === "127.0.0.1") return "http://localhost:3000";
+      return location.protocol + "//" + location.hostname + ":3000";
+    })();
+    document.getElementById("api-base-label").textContent = API;
+    function toast(msg, isErr) {
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.style.borderColor = isErr ? "#7f1d1d" : "var(--border)";
+      el.classList.add("show");
+      setTimeout(() => el.classList.remove("show"), 3200);
+    }
+    async function api(path, opts) {
+      const res = await fetch(API + path, { headers: { "Content-Type": "application/json" }, ...opts });
+      if (!res.ok) throw new Error(path + " → " + res.status);
+      return res.json();
+    }
+    function timeSlice(ts) {
+      if (!ts) return "—";
+      try { return new Date(ts).toLocaleTimeString(); } catch { return String(ts).slice(11, 19) || ts; }
+    }
+    function esc(s) {
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+    let allTelemetry = [], allAlerts = [];
+    function renderTelemetry() {
+      const cell = document.getElementById("filter-cell").value;
+      const metric = document.getElementById("filter-metric").value;
+      let rows = allTelemetry;
+      if (cell) rows = rows.filter((r) => r.cell_id === cell);
+      if (metric) rows = rows.filter((r) => r.metric === metric);
+      const body = document.getElementById("telemetry-body");
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="5" class="empty">No telemetry yet — start the simulator</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.slice(0, 40).map((i) =>
+        `<tr><td class="mono">${esc(i.sensor_id)}</td><td>${esc(i.cell_id)}</td><td>${esc(i.metric)}</td><td><strong>${esc(i.value)}</strong></td><td class="mono">${timeSlice(i.timestamp)}</td></tr>`
+      ).join("");
+    }
+    function renderAlerts() {
+      const body = document.getElementById("alerts-body");
+      if (!allAlerts.length) {
+        body.innerHTML = '<tr><td colspan="4" class="empty">No alerts — flood simulation triggers after ~45s</td></tr>';
+        document.getElementById("k-alerts").textContent = "0";
+        return;
+      }
+      document.getElementById("k-alerts").textContent = String(allAlerts.length);
+      body.innerHTML = allAlerts.map((a) => {
+        const sev = (a.severity || "warning").toLowerCase();
+        return `<tr>
+          <td class="sev-${sev}">${esc(sev)}</td>
+          <td class="mono">${esc(a.cell_id)}</td>
+          <td>${esc(a.message || a.metric || "")}</td>
+          <td><button type="button" class="primary btn-ack" data-cell="${esc(a.cell_id)}" data-sensor="${esc(a.sensor_id || "")}">ACK</button></td>
+        </tr>`;
+      }).join("");
+      body.querySelectorAll(".btn-ack").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await api("/alerts/ack", {
+              method: "POST",
+              body: JSON.stringify({ cell_id: btn.dataset.cell, sensor_id: btn.dataset.sensor || "", by: "ops-dashboard", note: "Acknowledged from control UI" }),
+            });
+            toast("Alert acknowledged for " + btn.dataset.cell);
+            await loadAcks();
+          } catch (e) {
+            toast(String(e.message || e), true);
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+    async function loadAcks() {
+      try {
+        const data = await api("/alerts/acked?count=15");
+        const body = document.getElementById("acks-body");
+        const items = data.items || [];
+        if (!items.length) {
+          body.innerHTML = '<tr><td colspan="5" class="empty">No acknowledgements yet</td></tr>';
+          return;
+        }
+        body.innerHTML = items.map((i) =>
+          `<tr><td class="mono">${esc(i.cell_id)}</td><td class="mono">${esc(i.sensor_id || "—")}</td><td>${esc(i.acknowledged_by || "—")}</td><td class="mono">${timeSlice(i.acknowledged_at)}</td><td>${esc(i.note || "")}</td></tr>`
+        ).join("");
+      } catch (_) {}
+    }
+    async function loadCells() {
+      try {
+        const data = await api("/cells");
+        const cells = data.cells || [];
+        document.getElementById("cell-count").textContent = cells.length + " registered";
+        document.getElementById("cells-wrap").innerHTML = cells.map((c) =>
+          `<div class="cell-chip"><div><div><strong>${esc(c.name || c.cell_id)}</strong></div><div class="mono" style="color:var(--muted)">${esc(c.cell_id)}</div></div><div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase">${esc(c.priority || "medium")}</div></div>`
+        ).join("") || '<div class="empty">No cells</div>';
+        const sel = document.getElementById("filter-cell");
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">All cells</option>' + cells.map((c) => `<option value="${esc(c.cell_id)}">${esc(c.name || c.cell_id)}</option>`).join("");
+        sel.value = cur;
+      } catch (_) {
+        document.getElementById("cells-wrap").innerHTML = '<div class="empty">Cells endpoint unavailable</div>';
+      }
+    }
     async function refresh() {
       try {
-        const h = await fetch(API + '/health').then(r => r.json());
-        document.getElementById('status-badge').textContent = h.status === 'ok' ? 'ONLINE' : 'DEGRADED';
-        document.getElementById('status-badge').className = 'badge ' + (h.status === 'ok' ? 'ok' : 'warn');
-        document.getElementById('uptime').textContent = Math.round(h.uptime_s || 0) + 's';
-        document.getElementById('msgs').textContent = h.messages_processed || 0;
-        document.getElementById('mqtt').textContent = h.mqtt_connected ? 'connected' : 'down';
-
-        const t = await fetch(API + '/telemetry/recent?count=20').then(r => r.json());
-        document.getElementById('telemetry-body').innerHTML = (t.items || []).map(i =>
-          `<tr><td>${i.sensor_id}</td><td>${i.cell_id}</td><td>${i.metric}</td><td>${i.value}</td><td>${(i.timestamp||'').slice(11,19)}</td></tr>`
-        ).join('') || '<tr><td colspan="5">No data yet</td></tr>';
-
-        try {
-          const a = await fetch(API + '/alerts/recent?count=10').then(r => r.json());
-          document.getElementById('alerts-body').innerHTML = (a.items || []).map(i =>
-            `<tr><td class="sev-${i.severity||'warning'}">${i.severity||'warning'}</td><td>${i.cell_id}</td><td>${i.message||''}</td><td>${(i.timestamp||'').slice(11,19)}</td></tr>`
-          ).join('') || '<tr><td colspan="4">No alerts</td></tr>';
-        } catch (_) {
-          document.getElementById('alerts-body').innerHTML = '<tr><td colspan="4">Alerts unavailable</td></tr>';
-        }
+        const h = await api("/health");
+        const online = h.mqtt_connected && h.redis_connected;
+        const badge = document.getElementById("sys-badge");
+        badge.textContent = online ? "ONLINE" : "DEGRADED";
+        badge.className = "badge " + (online ? "ok" : "warn");
+        document.getElementById("k-status").textContent = h.status || "—";
+        document.getElementById("k-uptime").textContent = Math.round(h.uptime_s || 0) + "s";
+        document.getElementById("k-msgs").textContent = h.messages_processed ?? "—";
+        document.getElementById("k-mqtt").textContent = h.mqtt_connected ? "up" : "down";
+        document.getElementById("k-redis").textContent = h.redis_connected ? "up" : "down";
+        const t = await api("/telemetry/recent?count=60");
+        allTelemetry = t.items || [];
+        renderTelemetry();
+        try { allAlerts = (await api("/alerts/recent?count=25")).items || []; } catch { allAlerts = []; }
+        renderAlerts();
+        await loadAcks();
       } catch (e) {
-        document.getElementById('status-badge').textContent = 'OFFLINE';
-        document.getElementById('status-badge').className = 'badge warn';
+        const badge = document.getElementById("sys-badge");
+        badge.textContent = "OFFLINE";
+        badge.className = "badge crit";
         console.warn(e);
       }
     }
-
+    document.getElementById("filter-cell").addEventListener("change", renderTelemetry);
+    document.getElementById("filter-metric").addEventListener("change", renderTelemetry);
+    document.getElementById("btn-refresh").addEventListener("click", () => { refresh(); loadCells(); });
+    loadCells();
     refresh();
     setInterval(refresh, 2500);
   </script>
