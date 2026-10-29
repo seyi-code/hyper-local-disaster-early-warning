@@ -1,12 +1,23 @@
 /**
  * Telemetry Broker — MQTT → Redis Stream with Zod validation.
- * Also exposes HTTP health, recent telemetry, alerts, and ACK endpoints.
+ * HTTP: health, metrics, telemetry, alerts, ACK, cells.
  */
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import mqtt, { MqttClient } from "mqtt";
 import Redis from "ioredis";
-import { TelemetrySchema, Telemetry } from "./schemas/telemetry.js";
+import { TelemetrySchema, type Telemetry } from "./schemas/telemetry.js";
+import { pino } from "pino";
+import fs from "node:fs";
+import path from "node:path";
+
+const log = pino({
+  level: process.env.LOG_LEVEL || "info",
+  transport:
+    process.env.NODE_ENV !== "production"
+      ? { target: "pino-pretty", options: { colorize: true } }
+      : undefined,
+});
 
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379/0";
 const REDIS_STREAM = process.env.REDIS_STREAM || "telemetry:raw";
@@ -14,153 +25,207 @@ const ALERTS_STREAM = process.env.ALERTS_STREAM || "alerts:triggered";
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
 const MQTT_TOPIC = process.env.MQTT_TOPIC || "sensors/+/telemetry";
 const MQTT_CLIENT_ID = process.env.MQTT_CLIENT_ID || "telemetry-broker";
-const MQTT_USERNAME = process.env.MQTT_USERNAME || "";
-const MQTT_PASSWORD = process.env.MQTT_PASSWORD || "";
-const PORT = parseInt(process.env.BROKER_PORT || "3000", 10);
-const API_KEY = process.env.API_KEY || "";
+const BROKER_PORT = Number(process.env.BROKER_PORT || 3000);
 
-const startedAt = Date.now();
+let mqttClient: MqttClient | null = null;
+let redis: Redis | null = null;
 let messagesProcessed = 0;
 let lastMessageAt: string | null = null;
-let mqttConnected = false;
+const startedAt = Date.now();
 
-const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
-let mqttClient: MqttClient;
+async function connectRedis(): Promise<Redis> {
+  const client = new Redis(REDIS_URL, { maxRetriesPerRequest: 3, lazyConnect: true });
+  await client.connect();
+  log.info({ url: REDIS_URL }, "Redis connected");
+  return client;
+}
 
-const app = Fastify({ logger: true });
-await app.register(cors, { origin: true });
-
-app.addHook("onRequest", async (req, reply) => {
-  if (!API_KEY) return;
-  if (req.url.startsWith("/health") || req.url.startsWith("/metrics")) return;
-  const key = req.headers["x-api-key"];
-  if (key !== API_KEY) {
-    return reply.code(401).send({ error: "unauthorized" });
-  }
-});
-
-app.get("/health", async () => ({
-  status: mqttConnected && redis.status === "ready" ? "ok" : "degraded",
-  uptime_s: Math.round((Date.now() - startedAt) / 1000),
-  mqtt_connected: mqttConnected,
-  redis_connected: redis.status === "ready",
-  messages_processed: messagesProcessed,
-  last_message_at: lastMessageAt,
-}));
-
-app.get("/metrics", async (_req, reply) => {
-  const lines = [
-    `# HELP ew_messages_processed Total telemetry messages written to Redis`,
-    `# TYPE ew_messages_processed counter`,
-    `ew_messages_processed ${messagesProcessed}`,
-    `# HELP ew_mqtt_connected MQTT connection status`,
-    `# TYPE ew_mqtt_connected gauge`,
-    `ew_mqtt_connected ${mqttConnected ? 1 : 0}`,
-    `# HELP ew_uptime_seconds Process uptime`,
-    `# TYPE ew_uptime_seconds gauge`,
-    `ew_uptime_seconds ${Math.round((Date.now() - startedAt) / 1000)}`,
-  ];
-  reply.type("text/plain").send(lines.join("\n") + "\n");
-});
-
-app.get<{ Querystring: { count?: string } }>("/telemetry/recent", async (req) => {
-  const count = Math.min(parseInt(req.query.count || "50", 10), 200);
-  const entries = await redis.xrevrange(REDIS_STREAM, "+", "-", "COUNT", count);
-  const items = entries.map(([id, fields]) => {
-    const obj: Record<string, string> = { id };
-    for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
-    return obj;
+function connectMqtt(): MqttClient {
+  const client = mqtt.connect(MQTT_BROKER_URL, {
+    clientId: MQTT_CLIENT_ID,
+    username: process.env.MQTT_USERNAME || undefined,
+    password: process.env.MQTT_PASSWORD || undefined,
+    clean: true,
+    reconnectPeriod: 3000,
+    connectTimeout: 10_000,
   });
-  return { items };
-});
+  client.on("connect", () => {
+    log.info({ broker: MQTT_BROKER_URL, topic: MQTT_TOPIC }, "MQTT connected");
+    client.subscribe(MQTT_TOPIC, { qos: 1 });
+  });
+  client.on("error", (err) => log.error({ err }, "MQTT error"));
+  client.on("message", async (topic, payload) => {
+    await handleTelemetry(topic, payload);
+  });
+  return client;
+}
 
-app.get<{ Querystring: { count?: string } }>("/alerts/recent", async (req) => {
-  const count = Math.min(parseInt(req.query.count || "20", 10), 100);
+async function handleTelemetry(topic: string, payload: Buffer): Promise<void> {
+  let parsed: unknown;
   try {
-    const entries = await redis.xrevrange(ALERTS_STREAM, "+", "-", "COUNT", count);
+    parsed = JSON.parse(payload.toString("utf8"));
+  } catch {
+    log.warn({ topic }, "Invalid JSON — dropped");
+    return;
+  }
+  const result = TelemetrySchema.safeParse(parsed);
+  if (!result.success) {
+    log.warn({ topic, errors: result.error.flatten() }, "Schema validation failed");
+    return;
+  }
+  const data: Telemetry = result.data;
+  if (!redis) return;
+  try {
+    await redis.xadd(
+      REDIS_STREAM, "*",
+      "sensor_id", data.sensor_id,
+      "cell_id", data.cell_id,
+      "metric", data.metric,
+      "value", String(data.value),
+      "timestamp", data.timestamp,
+      "lat", data.lat != null ? String(data.lat) : "",
+      "lon", data.lon != null ? String(data.lon) : "",
+      "battery_pct", data.battery_pct != null ? String(data.battery_pct) : "",
+      "raw", JSON.stringify(data)
+    );
+    messagesProcessed += 1;
+    lastMessageAt = new Date().toISOString();
+  } catch (err) {
+    log.error({ err }, "Failed to write Redis Stream");
+  }
+}
+
+async function main() {
+  redis = await connectRedis();
+  mqttClient = connectMqtt();
+  const app = Fastify({ logger: false });
+  await app.register(cors, { origin: true });
+  const API_KEY = process.env.API_KEY || "";
+
+  app.addHook("onRequest", async (req, reply) => {
+    if (!API_KEY) return;
+    if (req.url.startsWith("/health") || req.url.startsWith("/metrics")) return;
+    const key = (req.headers["x-api-key"] as string) || (req.query as any).api_key;
+    if (key !== API_KEY) return reply.code(401).send({ error: "Unauthorized" });
+  });
+
+  app.get("/health", async () => ({
+    status: "ok",
+    uptime_s: Math.floor((Date.now() - startedAt) / 1000),
+    mqtt_connected: mqttClient?.connected ?? false,
+    redis_connected: redis?.status === "ready",
+    messages_processed: messagesProcessed,
+    last_message_at: lastMessageAt,
+  }));
+
+  app.get("/metrics", async (_req, reply) => {
+    const body = [
+      `telemetry_messages_processed_total ${messagesProcessed}`,
+      `telemetry_mqtt_connected ${mqttClient?.connected ? 1 : 0}`,
+      `telemetry_redis_connected ${redis?.status === "ready" ? 1 : 0}`,
+      `telemetry_uptime_seconds ${Math.floor((Date.now() - startedAt) / 1000)}`,
+    ].join("\n");
+    return reply.type("text/plain").send(body + "\n");
+  });
+
+  app.get("/telemetry/recent", async (req, reply) => {
+    if (!redis) return reply.code(503).send({ error: "Redis unavailable" });
+    const count = Number((req.query as any).count || 50);
+    const entries = await redis.xrevrange(REDIS_STREAM, "+", "-", "COUNT", count);
     const items = entries.map(([id, fields]) => {
       const obj: Record<string, string> = { id };
       for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
       return obj;
     });
-    return { items };
-  } catch {
-    return { items: [] };
-  }
-});
-
-app.post<{ Body: { cell_id: string; sensor_id?: string } }>("/alerts/ack", async (req) => {
-  const { cell_id, sensor_id } = req.body || ({} as any);
-  if (!cell_id) return { ok: false, error: "cell_id required" };
-  await redis.xadd(
-    "alerts:acked",
-    "*",
-    "cell_id",
-    cell_id,
-    "sensor_id",
-    sensor_id || "",
-    "acked_at",
-    new Date().toISOString()
-  );
-  return { ok: true };
-});
-
-function connectMqtt() {
-  const opts: mqtt.IClientOptions = {
-    clientId: MQTT_CLIENT_ID,
-    reconnectPeriod: 3000,
-  };
-  if (MQTT_USERNAME) {
-    opts.username = MQTT_USERNAME;
-    opts.password = MQTT_PASSWORD;
-  }
-  mqttClient = mqtt.connect(MQTT_BROKER_URL, opts);
-
-  mqttClient.on("connect", () => {
-    mqttConnected = true;
-    app.log.info({ topic: MQTT_TOPIC }, "MQTT connected");
-    mqttClient.subscribe(MQTT_TOPIC, { qos: 1 });
+    return { count: items.length, items };
   });
 
-  mqttClient.on("close", () => {
-    mqttConnected = false;
-  });
-
-  mqttClient.on("error", (err) => {
-    app.log.error({ err }, "MQTT error");
-  });
-
-  mqttClient.on("message", async (_topic, payload) => {
+  app.get("/alerts/recent", async (req, reply) => {
+    if (!redis) return reply.code(503).send({ error: "Redis unavailable" });
+    const count = Number((req.query as any).count || 30);
     try {
-      const raw = JSON.parse(payload.toString());
-      const parsed: Telemetry = TelemetrySchema.parse(raw);
-      const fields: string[] = [
-        "sensor_id", parsed.sensor_id,
-        "cell_id", parsed.cell_id,
-        "metric", parsed.metric,
-        "value", String(parsed.value),
-        "timestamp", String(parsed.timestamp),
-      ];
-      if (parsed.lat != null) fields.push("lat", String(parsed.lat));
-      if (parsed.lon != null) fields.push("lon", String(parsed.lon));
-      if (parsed.battery_pct != null) fields.push("battery_pct", String(parsed.battery_pct));
-
-      await redis.xadd(REDIS_STREAM, "*", ...fields);
-      messagesProcessed += 1;
-      lastMessageAt = new Date().toISOString();
-    } catch (err) {
-      app.log.warn({ err }, "Invalid telemetry dropped");
+      const entries = await redis.xrevrange(ALERTS_STREAM, "+", "-", "COUNT", count);
+      const items = entries.map(([id, fields]) => {
+        const obj: Record<string, string> = { id };
+        for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
+        return obj;
+      });
+      return { count: items.length, items };
+    } catch {
+      return { count: 0, items: [] };
     }
   });
-}
 
-async function main() {
-  connectMqtt();
-  await app.listen({ port: PORT, host: "0.0.0.0" });
-  app.log.info(`Telemetry broker listening on :${PORT}`);
+  app.post("/alerts/ack", async (req, reply) => {
+    if (!redis) return reply.code(503).send({ error: "Redis unavailable" });
+    const body = (req.body || {}) as Record<string, string>;
+    if (!body.cell_id) return reply.code(400).send({ error: "cell_id required" });
+    const ack = {
+      cell_id: body.cell_id,
+      sensor_id: body.sensor_id || "",
+      acknowledged_by: body.by || "operator",
+      acknowledged_at: new Date().toISOString(),
+      note: body.note || "",
+    };
+    await redis.xadd(
+      "alerts:acked", "*",
+      "cell_id", ack.cell_id,
+      "sensor_id", ack.sensor_id,
+      "acknowledged_by", ack.acknowledged_by,
+      "acknowledged_at", ack.acknowledged_at,
+      "note", ack.note
+    );
+    log.info(ack, "Alert acknowledged");
+    return { ok: true, ...ack };
+  });
+
+  app.get("/cells", async () => {
+    const candidates = [
+      process.env.CELLS_CONFIG_PATH,
+      path.join(process.cwd(), "config", "cells.json"),
+      "/app/config/cells.json",
+    ].filter(Boolean) as string[];
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf8"));
+      } catch { /* next */ }
+    }
+    return {
+      cells: [
+        { cell_id: "cell-kampala-01", name: "Kampala Central", center: [-0.3136, 32.5811], priority: "high" },
+        { cell_id: "cell-kampala-02", name: "Makerere / Wandegeya", center: [-0.335, 32.568], priority: "high" },
+        { cell_id: "cell-entebbe-01", name: "Entebbe Lakeshore", center: [0.0422, 32.4435], priority: "medium" },
+      ],
+    };
+  });
+
+  app.get("/alerts/acked", async (req, reply) => {
+    if (!redis) return reply.code(503).send({ error: "Redis unavailable" });
+    const count = Number((req.query as any).count || 20);
+    try {
+      const entries = await redis.xrevrange("alerts:acked", "+", "-", "COUNT", count);
+      const items = entries.map(([id, fields]) => {
+        const obj: Record<string, string> = { id };
+        for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
+        return obj;
+      });
+      return { count: items.length, items };
+    } catch {
+      return { count: 0, items: [] };
+    }
+  });
+
+  await app.listen({ port: BROKER_PORT, host: "0.0.0.0" });
+  log.info({ port: BROKER_PORT }, "Telemetry broker HTTP server listening");
 }
 
 main().catch((err) => {
-  console.error(err);
+  log.fatal({ err }, "Fatal startup error");
   process.exit(1);
+});
+
+process.on("SIGTERM", () => {
+  mqttClient?.end(true);
+  redis?.disconnect();
+  process.exit(0);
 });
