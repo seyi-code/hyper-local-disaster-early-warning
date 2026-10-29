@@ -1,0 +1,17 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+venv/
+node_modules/
+dist/
+.DS_Store
+*.log
+.idea/
+.vscode/
+redis-data/
+*.egg-info/
+.coverage
+htmlcov/
+backups/
+config/mqtt/passwd
